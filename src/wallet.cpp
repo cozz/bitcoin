@@ -1568,8 +1568,210 @@ string CWallet::SendMoneyToDestination(const CTxDestination& address, int64_t nV
     return SendMoney(scriptPubKey, nValue, wtxNew);
 }
 
+// checks whether a reissue is possible
+bool CWallet::IsReissueable(CWalletTx& wtxOld, string& strFailReason)
+{
+    int nDepth = wtxOld.GetDepthInMainChain();
 
+    if (wtxOld.hashReissued != 0 && wtxOld.hashReissued != 1) {
+        strFailReason = strprintf(_("Transaction has already been reissued, new txid is %s"), wtxOld.hashReissued.GetHex().c_str());
+        return false;
+    }
 
+    if (nDepth > 0) {
+        strFailReason = _("Transaction is already confirmed");
+        return false;
+    }
+    if (nDepth == 0) {
+        strFailReason = _("Transaction is not involved in conflicts, should confirm as normal");
+        return false;
+    }
+    // nDepth is -1
+
+    set<uint256> setConflicts;
+    setConflicts = wtxOld.GetConflicts();
+
+    if (!setConflicts.empty()) {
+        string s;
+        BOOST_FOREACH(const uint256& hash, setConflicts)
+            s += hash.GetHex() + ",";
+        strFailReason = strprintf(_("Transaction has been replaced by/conflicts with %s this can happen due to transaction malleability"), s.c_str());
+        return false;
+    }
+
+    // we only allow reissuing if all parent conflicts are confirmed by 6 confirmations
+    bool fParentConflictFound = false;
+    std::vector<uint256> vWorkQueue;
+    set<uint256> setAlreadyQueued;
+    vWorkQueue.push_back(wtxOld.GetHash());
+    for (unsigned int i = 0; i < vWorkQueue.size(); i++)
+    {
+        map<uint256, CWalletTx>::const_iterator mi = mapWallet.find(vWorkQueue[i]);
+
+        if (mi == mapWallet.end())
+            continue;
+
+        const CWalletTx& wtx = (*mi).second;
+
+        if (wtx.GetDepthInMainChain() >= 0)
+            continue;
+
+        set<uint256> setConflicts2;
+        setConflicts2 = wtx.GetConflicts();
+
+        if (!setConflicts2.empty())
+        {
+            bool fConflictConfirmed = false;
+            uint256 hash;
+            int confirmations;
+            BOOST_FOREACH(const uint256& conflict, setConflicts2)
+            {
+                map<uint256, CWalletTx>::const_iterator mi2 = mapWallet.find(conflict);
+                if (mi2 == mapWallet.end())
+                    continue;
+                const CWalletTx& wtx2 = (*mi2).second;
+                nDepth = wtx2.GetDepthInMainChain();
+                if (nDepth >= 6)
+                {
+                    fConflictConfirmed = true;
+                    fParentConflictFound = true;
+                }
+                else if (nDepth >= 0)
+                {
+                    hash = conflict;
+                    confirmations = nDepth;
+                }
+            }
+            if (!fConflictConfirmed)
+            {
+                strFailReason = strprintf(_("Reissue is possible when the conflict causing transaction has at least 6 confirmations (currently %d), txid is %s"), confirmations, hash.GetHex().c_str());
+                return false;
+            }
+        }
+
+        BOOST_FOREACH(const CTxIn& txin, wtx.vin)
+        {
+            if (setAlreadyQueued.count(txin.prevout.hash))
+                continue;
+            setAlreadyQueued.insert(txin.prevout.hash);
+            vWorkQueue.push_back(txin.prevout.hash);
+        }
+    }
+
+    // this is a safety check to ensure really only reissuing transactions where there is a confirmed parent conflict
+    if (!fParentConflictFound)
+    {
+        strFailReason = strprintf(_("ReissueTransaction failed, unexpected error %d"), 6);
+        return false;
+    }
+
+    return true;
+}
+
+bool CWallet::ReissueTransaction(CWalletTx& wtxOld, string& strFailReason)
+{
+    if (!IsReissueable(wtxOld, strFailReason))
+        return false;
+
+    if (IsLocked())
+    {
+        strFailReason = _("Error: Wallet locked, unable to create transaction!");
+        return false;
+    }
+
+    int64_t nTotal = 0;
+    CTxDestination destChange;
+    destChange = CNoDestination();
+    vector<pair<CScript, int64_t> > vecSend;
+    BOOST_FOREACH(const CTxOut& txout, wtxOld.vout)
+    {
+        if (IsMine(txout) && wtxOld.vout.size() > 1 && boost::get<CNoDestination>(&destChange)) // set change address to first IsMine found, except if we are the only recipient
+        {
+            if (!ExtractDestination(txout.scriptPubKey, destChange)) // if this fails simply add to recipients
+            {
+                destChange = CNoDestination();
+                nTotal += txout.nValue;
+                vecSend.push_back(make_pair(txout.scriptPubKey, txout.nValue));
+            }
+        }
+        else
+        {
+            nTotal += txout.nValue;
+            vecSend.push_back(make_pair(txout.scriptPubKey, txout.nValue));
+        }
+    }
+
+    // make inputs from normal non-conflicting transactions spendable again
+    if (wtxOld.hashReissued == 0)
+    {
+        BOOST_FOREACH(const CTxIn& txin, wtxOld.vin)
+        {
+            std::map<uint256, CWalletTx>::iterator mi = mapWallet.find(txin.prevout.hash);
+            if (mi != mapWallet.end())
+            {
+                CWalletTx& wtx = (*mi).second;
+                if (wtx.GetDepthInMainChain() >= 0)
+                {
+                    wtx.MarkUnspent(txin.prevout.n);
+                    wtx.WriteToDisk();
+                    NotifyTransactionChanged(this, wtx.GetHash(), CT_UPDATED);
+                }
+            }
+        }
+
+        // this is used as flag, just in case reissue fails after here, we would not make the inputs spendable again, only one time
+        wtxOld.hashReissued = 1;
+        wtxOld.WriteToDisk();
+    }
+
+    if (nTotal + nTransactionFee > GetBalance())
+    {
+        strFailReason = _("The amount exceeds your balance.");
+        return false;
+    }
+
+    // Send
+    CWalletTx wtxNew;
+    CReserveKey reservekey(this);
+    int64_t nFeeRequired = 0;
+    string strFailReason2;
+    CCoinControl coinControl;
+    coinControl.destChange = destChange; // its ok if this is CNoDestination
+
+    if (!CreateTransaction(vecSend, wtxNew, reservekey, nFeeRequired, strFailReason2, &coinControl))
+    {
+        strFailReason = strFailReason2;
+        if (nTotal + nFeeRequired > GetBalance())
+            strFailReason = strprintf(_("Error: This transaction requires a transaction fee of at least %s because of its amount, complexity, or use of recently received funds!"), FormatMoney(nFeeRequired));
+
+        return false;
+    }
+
+    // copy meta data
+    const CWalletTx* copyFrom = &wtxOld;
+    CWalletTx* copyTo = &wtxNew;
+    copyTo->mapValue = copyFrom->mapValue;
+    copyTo->vOrderForm = copyFrom->vOrderForm;
+    // fTimeReceivedIsTxTime not copied on purpose
+    // nTimeReceived not copied on purpose
+    copyTo->nTimeSmart = copyFrom->nTimeSmart;
+    copyTo->fFromMe = copyFrom->fFromMe;
+    copyTo->strFromAccount = copyFrom->strFromAccount;
+    // vfSpent not copied on purpose
+    // nOrderPos not copied on purpose
+    // cached members not copied on purpose
+
+    if (!CommitTransaction(wtxNew, reservekey))
+    {
+        strFailReason = _("Error: The transaction was rejected! This might happen if some of the coins in your wallet were already spent, such as if you used a copy of wallet.dat and coins were spent in the copy but not marked as spent here.");
+        return false;
+    }
+
+    wtxOld.hashReissued = wtxNew.GetHash();
+    wtxOld.WriteToDisk();
+
+    return true;
+}
 
 DBErrors CWallet::LoadWallet(bool& fFirstRunRet)
 {

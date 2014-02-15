@@ -1503,6 +1503,45 @@ Value gettransaction(const Array& params, bool fHelp)
     return entry;
 }
 
+Value reissuetransaction(const Array& params, bool fHelp)
+{
+    if (fHelp || params.size() != 1)
+        throw runtime_error(
+            "reissuetransaction \"txid\"\n"
+            "\nCreates, signs and broadcasts a clone of the given <txid>\n"
+            "\nThis is only meant to be used on stucked unconfirmed transactions because they built on unconfirmed change\n"
+            "\ntransactions that were malleated or double spended.\n"
+            "\nThrows an error if:\n"
+            "\n - the transaction has already been succesful reissued before, so only one reissue per transaction\n"
+            "\n - the transaction is already confirmed (>0 confirmations)\n"
+            "\n - the transaction is unconfirmed and not involved in conflicts, so probably will confirm normal\n"
+            "\n - the transaction has been malleated/double spended itself, meaning there already is a clone out there\n"
+            "\n - the transactions causing the conflicts(those malleating the parent) have less than 6 confirmations\n"
+            + HelpRequiringPassphrase() +
+            "\nArguments:\n"
+            "1. \"txid\"    (string, required) The transaction id of the transaction you want to reissue\n"
+            "\nResult:\n"
+            "\"transactionid\"  (string) The transaction id of the new transaction. (view at https://blockchain.info/tx/[transactionid])\n"
+            "\nExamples:\n"
+            + HelpExampleCli("reissuetransaction", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\"")
+            + HelpExampleRpc("reissuetransaction", "\"1075db55d416d3ca199f55b6084e2115b9345e16c5cf302fc80e9d5fbf5d48d\"")
+        );
+
+    uint256 hash;
+    hash.SetHex(params[0].get_str());
+
+    if (!pwalletMain->mapWallet.count(hash))
+        throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid or non-wallet transaction id");
+    CWalletTx& wtx = pwalletMain->mapWallet[hash];
+
+    EnsureWalletIsUnlocked();
+
+    string strFailReason;
+    if (!pwalletMain->ReissueTransaction(wtx, strFailReason))
+        throw JSONRPCError(RPC_WALLET_ERROR, strFailReason);
+
+    return wtx.hashReissued.GetHex();
+}
 
 Value backupwallet(const Array& params, bool fHelp)
 {
