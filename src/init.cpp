@@ -242,7 +242,7 @@ std::string HelpMessage(HelpMessageMode hmm)
 
 #ifdef ENABLE_WALLET
     strUsage += "\n" + _("Wallet options:") + "\n";
-    strUsage += "  -disablewallet         " + _("Do not load the wallet and disable wallet RPC calls") + "\n";
+    strUsage += "  -enablewallet          " + _("Enable wallet functionality (default: 1 when wallet.dat file is present)") + "\n";
     strUsage += "  -paytxfee=<amt>        " + _("Fee per kB to add to transactions you send") + "\n";
     strUsage += "  -rescan                " + _("Rescan the block chain for missing wallet transactions") + " " + _("on startup") + "\n";
     strUsage += "  -salvagewallet         " + _("Attempt to recover private keys from a corrupt wallet.dat") + " " + _("on startup") + "\n";
@@ -534,7 +534,9 @@ bool AppInit2(boost::thread_group& threadGroup)
     fLogTimestamps = GetBoolArg("-logtimestamps", true);
     setvbuf(stdout, NULL, _IOLBF, 0);
 #ifdef ENABLE_WALLET
-    bool fDisableWallet = GetBoolArg("-disablewallet", false);
+    if (GetBoolArg("-disablewallet", false)) // kept for compatibility
+        SoftSetBoolArg("-enablewallet", false);
+    bool fEnableWallet = GetBoolArg("-enablewallet", false);
 #endif
 
     if (mapArgs.count("-timeout"))
@@ -626,7 +628,12 @@ bool AppInit2(boost::thread_group& threadGroup)
 
     // ********************************************************* Step 5: verify wallet database integrity
 #ifdef ENABLE_WALLET
-    if (!fDisableWallet) {
+
+    // If no explicit choice by the user, make it dependent on whether wallet.dat exists
+    if (!mapArgs.count("-enablewallet"))
+        fEnableWallet = filesystem::exists(GetDataDir() / strWalletFile);
+
+    if (fEnableWallet) {
         LogPrintf("Using wallet %s\n", strWalletFile);
         uiInterface.InitMessage(_("Verifying wallet..."));
 
@@ -671,7 +678,7 @@ bool AppInit2(boost::thread_group& threadGroup)
             if (r == CDBEnv::RECOVER_FAIL)
                 return InitError(_("wallet.dat corrupt, salvage failed"));
         }
-    } // (!fDisableWallet)
+    } // (fEnableWallet)
 #endif // ENABLE_WALLET
     // ********************************************************* Step 6: network initialization
 
@@ -932,7 +939,7 @@ bool AppInit2(boost::thread_group& threadGroup)
 
     // ********************************************************* Step 8: load wallet
 #ifdef ENABLE_WALLET
-    if (fDisableWallet) {
+    if (!fEnableWallet) {
         pwalletMain = NULL;
         LogPrintf("Wallet disabled!\n");
     } else {
@@ -1036,7 +1043,7 @@ bool AppInit2(boost::thread_group& threadGroup)
             pwalletMain->SetBestChain(chainActive.GetLocator());
             nWalletDBUpdated++;
         }
-    } // (!fDisableWallet)
+    } // (fEnableWallet)
 #else // ENABLE_WALLET
     LogPrintf("No wallet compiled in!\n");
 #endif // !ENABLE_WALLET

@@ -898,7 +898,7 @@ json_spirit::Value CRPCTable::execute(const std::string &strMethod, const json_s
         throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found");
 #ifdef ENABLE_WALLET
     if (pcmd->reqWallet && !pwalletMain)
-        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method not found (disabled)");
+        throw JSONRPCError(RPC_METHOD_NOT_FOUND, "Method is disabled (to enable add enablewallet to your bitcoin.conf)");
 #endif
 
     // Observe safe mode

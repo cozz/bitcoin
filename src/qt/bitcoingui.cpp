@@ -74,8 +74,8 @@ BitcoinGUI::BitcoinGUI(bool fIsTestnet, QWidget *parent) :
 
     QString windowTitle = tr("Bitcoin Core") + " - ";
 #ifdef ENABLE_WALLET
-    /* if compiled with wallet support, -disablewallet can still disable the wallet */
-    bool enableWallet = !GetBoolArg("-disablewallet", false);
+    /* if compiled with wallet support, -enablewallet can still disable the wallet */
+    bool enableWallet = GetBoolArg("-enablewallet", false);
 #else
     bool enableWallet = false;
 #endif
@@ -123,7 +123,7 @@ BitcoinGUI::BitcoinGUI(bool fIsTestnet, QWidget *parent) :
     } else
 #endif
     {
-        /* When compiled without wallet or -disablewallet is provided,
+        /* When compiled without wallet or -enablewallet=0 is provided,
          * the central widget is the rpc console.
          */
         setCentralWidget(rpcConsole);

@@ -203,6 +203,16 @@
          </property>
          <layout class="QVBoxLayout" name="verticalLayout_2">
           <item>
+           <widget class="QCheckBox" name="enableWallet">
+            <property name="toolTip">
+             <string>Enables wallet functionality. Disabling can be useful, if this node does not need to send or receive bitcoins at all.</string>
+            </property>
+            <property name="text">
+             <string>&amp;Enable wallet</string>
+            </property>
+           </widget>
+          </item>
+          <item>
            <widget class="QCheckBox" name="coinControlFeatures">
             <property name="toolTip">
              <string>Whether to show coin control features or not.</string>

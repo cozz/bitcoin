@@ -92,6 +92,16 @@ void OptionsModel::Init()
 
     // Wallet
 #ifdef ENABLE_WALLET
+    if (!settings.contains("enablewallet"))
+        settings.setValue("enablewallet", true);
+    if (GetBoolArg("-disablewallet", false)) // kept for compatibility
+    {
+        SoftSetBoolArg("-enablewallet", false);
+        addOverriddenOption("-disablewallet");
+    }
+    else if (!SoftSetBoolArg("-enablewallet", settings.value("enablewallet").toBool()))
+        addOverriddenOption("-enablewallet");
+
     if (!settings.contains("nTransactionFee"))
         settings.setValue("nTransactionFee", (qint64)DEFAULT_TRANSACTION_FEE);
     nTransactionFee = settings.value("nTransactionFee").toLongLong(); // if -paytxfee is set, this will be overridden later in init.cpp
@@ -187,6 +197,8 @@ QVariant OptionsModel::data(const QModelIndex & index, int role) const
             return settings.value("nSocksVersion", 5);
 
 #ifdef ENABLE_WALLET
+        case EnableWallet:
+            return settings.value("enablewallet");
         case Fee:
             // Attention: Init() is called before nTransactionFee is set in AppInit2()!
             // To ensure we can change the fee on-the-fly update our QSetting when
@@ -284,6 +296,12 @@ bool OptionsModel::setData(const QModelIndex & index, const QVariant & value, in
         }
         break;
 #ifdef ENABLE_WALLET
+        case EnableWallet:
+            if (settings.value("enablewallet") != value) {
+                settings.setValue("enablewallet", value);
+                setRestartRequired(true);
+            }
+            break;
         case Fee: // core option - can be changed on-the-fly
             // Todo: Add is valid check  and warn via message, if not
             nTransactionFee = value.toLongLong();
